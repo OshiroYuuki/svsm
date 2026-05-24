@@ -22,7 +22,7 @@ permissions:
 jobs:
   check:
     name: QEMU NOCC test-in-svsm
-    runs-on: ubuntu-latest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
+    runs-on: ubuntu-latest
     steps:
 
       - name: Harden the runner (Audit all outbound calls)
