@@ -2,7 +2,7 @@ name: qemu
 #test comment to get baseline time 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -17,6 +17,7 @@ env:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   check:
@@ -119,6 +120,7 @@ jobs:
 
       ## TODO: We can replace the SVSM build step and download the IGVM file as an artifact
       # from the "Rust check" jobs instread to speed things up.
+      
       - name: Wait for and download IGVM artifact from Rust workflow
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -134,13 +136,11 @@ jobs:
 
           echo "Waiting for artifact '$ARTIFACT_NAME' from '$WORKFLOW_NAME' workflow..."
           
-          # Create the bin directory so we can drop the downloaded file in it
           mkdir -p bin/
 
           for i in $(seq 1 $MAX_RETRIES); do
             echo "Attempt $i: Checking for workflow run... (Next check in ${CURRENT_INTERVAL}s)"
 
-            # Query GitHub API for the run ID and status of the Rust workflow for this exact commit
             RUN_INFO=$(gh run list --workflow "$WORKFLOW_NAME" --commit "$COMMIT_SHA" --json databaseId,status,conclusion -q '.[0]')
 
             if [ "$RUN_INFO" == "null" ] || [ -z "$RUN_INFO" ]; then
@@ -150,13 +150,11 @@ jobs:
               STATUS=$(echo "$RUN_INFO" | jq -r .status)
               CONCLUSION=$(echo "$RUN_INFO" | jq -r .conclusion)
 
-              # Optimization: If the Rust workflow failed, don't wait around. Fail this workflow too.
               if [ "$CONCLUSION" == "failure" ] || [ "$CONCLUSION" == "cancelled" ]; then
                 echo "Error: Rust workflow failed or was cancelled. Aborting to save CI time."
                 exit 1
               fi
 
-              # Try to download the artifact silently. If it succeeds, exit the loop!
               if gh run download "$RUN_ID" -n "$ARTIFACT_NAME" --dir bin/ > /dev/null 2>&1; then
                 echo "Success! Artifact '$ARTIFACT_NAME' downloaded."
                 ls -lh bin/
@@ -169,7 +167,7 @@ jobs:
             # Sleep for the current interval
             sleep $CURRENT_INTERVAL
 
-            # Decrease the interval for the next loop, but don't drop below the minimum
+            # Decrease the interval for the next loop
             if [ $CURRENT_INTERVAL -gt $MIN_INTERVAL ]; then
               CURRENT_INTERVAL=$((CURRENT_INTERVAL - DECREMENT))
             fi

@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -110,7 +110,7 @@ jobs:
         run: make test
 
       - name: Upload IGVM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: coconut-test-qemu-igvm
           path: bin/coconut-test-qemu.igvm # Adjust this path if it's built elsewhere
