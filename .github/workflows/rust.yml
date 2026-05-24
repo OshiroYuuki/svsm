@@ -109,6 +109,13 @@ jobs:
       - name: Run tests
         run: make test
 
+      - name: Upload IGVM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coconut-test-qemu-igvm
+          path: bin/coconut-test-qemu.igvm # Adjust this path if it's built elsewhere
+          retention-days: 1
+
   build-test-release:
     name: Build & test (release)
     runs-on: ubuntu-latest
