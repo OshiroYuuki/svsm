@@ -1,10 +1,10 @@
 name: qemu
 
 on:
-  workflow_run:
-    workflows: ["Rust"]
-    types:
-      - completed
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,6 +17,7 @@ env:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   check:
@@ -117,12 +118,79 @@ jobs:
 
           popd
 
-      - name: Download IGVM artifact from Rust workflow
-        uses: actions/download-artifact@v4
+      - name: Find companion Rust run and wait for IGVM artifact
+        id: find_rust_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Locate the Rust workflow run for this commit. The qemu workflow may
+          # start before Rust has registered its run, so retry briefly.
+          RUST_RUN_ID=""
+          for _ in $(seq 1 30); do
+            RUST_RUN_ID=$(gh run list --repo "$REPO" \
+              --workflow "Rust" \
+              --commit "$COMMIT_SHA" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if [ -n "$RUST_RUN_ID" ]; then
+              break
+            fi
+            echo "Companion Rust run not visible yet, retrying in 10s..."
+            sleep 10
+          done
+
+          if [ -z "$RUST_RUN_ID" ]; then
+            echo "Could not find a Rust workflow run for commit $COMMIT_SHA" >&2
+            exit 1
+          fi
+          echo "Found companion Rust run: $RUST_RUN_ID"
+
+          # Poll for the artifact to appear. Its presence means build-test-debug
+          # finished successfully. Fail fast if the whole Rust run ends without
+          # producing it.
+          for _ in $(seq 1 180); do
+            ARTIFACT_ID=$(gh api \
+              "repos/$REPO/actions/runs/$RUST_RUN_ID/artifacts" \
+              --jq '.artifacts[] | select(.name == "coconut-igvm-artifact" and .expired == false) | .id' \
+              | head -n1)
+            if [ -n "$ARTIFACT_ID" ]; then
+              echo "Artifact coconut-igvm-artifact is ready (id=$ARTIFACT_ID)"
+              echo "rust_run_id=$RUST_RUN_ID" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            RUN_INFO=$(gh run view "$RUST_RUN_ID" --repo "$REPO" \
+              --json status,conclusion \
+              --jq '.status + "/" + (.conclusion // "")')
+            case "$RUN_INFO" in
+              completed/success)
+                echo "Rust run completed successfully but artifact is missing." >&2
+                exit 1
+                ;;
+              completed/*)
+                echo "Rust run finished with non-success status: $RUN_INFO" >&2
+                exit 1
+                ;;
+            esac
+
+            echo "Artifact not ready (run status: $RUN_INFO), waiting 10s..."
+            sleep 10
+          done
+
+          echo "Timed out waiting for coconut-igvm-artifact" >&2
+          exit 1
+
+      - name: Download coconut-test-qemu.igvm artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coconut-igvm-artifact
           path: bin/
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ steps.find_rust_run.outputs.rust_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install netcat used by test-in-svsm for vsock tests
@@ -144,9 +212,9 @@ jobs:
           # actions run in parallel. On push-to-main events the PR number is empty, default to 0.
           # 1024 is the first non reserved port, 10 is an arbitrary number that should be safe enough
           # to avoid conflicts.
-          PR_NUM=$(jq -r '.workflow_run.pull_requests[0].number // 0' "$GITHUB_EVENT_PATH")
-          VSOCK_PORT=$(( PR_NUM + 1024 ))
-          VSOCK_CID=$(( PR_NUM + 10 ))
+          PR_NUM=${{ github.event.pull_request.number }}
+          VSOCK_PORT=$(( ${PR_NUM:-0} + 1024 ))
+          VSOCK_CID=$(( ${PR_NUM:-0} + 10 ))
           QEMU=./citests/qemu/bin/qemu-system-x86_64 scripts/test-in-svsm.sh \
             --vsock-port $VSOCK_PORT --vsock-cid $VSOCK_CID \
             --nocc --timeout 180 \
@@ -155,4 +223,3 @@ jobs:
       - name: Dump host kernel messages on QEMU or test failure
         if: failure()
         run: sudo dmesg
-
